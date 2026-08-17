@@ -1,10 +1,7 @@
 """
 scraper.py
 ----------
-Replace the body of `fetch_player` and `fetch_all_tracked_players` with your
-actual scraping logic.  The rest of the bot only depends on the signatures
-defined here, so you can swap in any implementation without touching anything
-else.
+Scrapes player data from wank.wavu.wiki.
 """
 
 import asyncio
@@ -12,60 +9,76 @@ import aiohttp
 from bs4 import BeautifulSoup
 from models import Player
 
+BASE_URL = "https://wank.wavu.wiki/player/"
 
-# ---------------------------------------------------------------------------
-# Public API used by the bot
-# ---------------------------------------------------------------------------
 
-async def fetch_player(player_id: str, session) -> Player | None:
+async def fetch_player(player_id: str, session: aiohttp.ClientSession | None = None) -> Player | None:
     """
     Fetch a single player by their site ID.
-
     Returns a populated Player object, or None if the player was not found.
-    Replace this stub with your real scraping / API call.
+    Accepts an optional shared session for bulk fetches.
     """
-    async with session.get("https://wank.wavu.wiki/player/" + id) as response:
+    own_session = session is None
+    if own_session:
+        session = aiohttp.ClientSession()
+
+    try:
+        async with session.get(BASE_URL + player_id) as response:
+            if response.status == 404:
+                return None
+            if response.status != 200:
+                print(f"[scraper] Unexpected status {response.status} for player {player_id}")
+                return None
+
             soup = BeautifulSoup(await response.text(), "html.parser")
-            player = Player(id)
-            character = None
-            rating = 0
-    
-            for div in soup.find_all('div', class_='rating'):
-                new_rating = int(div.find('div', class_='mu').text[2:])
-                if new_rating > rating:
-                    rating = new_rating
-                    character = div
-                # add check for cases when rating is the same, then pick whichever has lower deviation
-            
-            player.main_character = character.find('div', class_='char').text
-            player.name = soup.find('div', class_='name').text.strip()
-            player.last_played = character.find('div', class_='last-seen').text
-            player.rating = rating
-            player.games = int(character.find('div', class_='games').text.replace(" games", ""))
-            player.deviation = int(character.find('div', class_='sigma').text.replace("σ² ", ""))
-    
+
+            # Find the character div with the highest rating.
+            # Tiebreak: lower deviation wins.
+            best_char = None
+            best_rating = -1
+            best_deviation = float("inf")
+
+            for div in soup.find_all("div", class_="rating"):
+                mu_div = div.find("div", class_="mu")
+                sigma_div = div.find("div", class_="sigma")
+                if mu_div is None or sigma_div is None:
+                    continue
+
+                rating = int(mu_div.text[2:])  # strips the "μ=" prefix
+                deviation = int(sigma_div.text.replace("σ² ", ""))
+
+                if rating > best_rating or (rating == best_rating and deviation < best_deviation):
+                    best_rating = rating
+                    best_deviation = deviation
+                    best_char = div
+
+            if best_char is None:
+                return None
+
+            name_div = soup.find("div", class_="name")
+            player = Player(
+                id=player_id,
+                name=name_div.text.strip() if name_div else "",
+                main_character=best_char.find("div", class_="char").text,
+                rating=best_rating,
+                games=int(best_char.find("div", class_="games").text.replace(" games", "")),
+                deviation=best_deviation,
+                last_played=best_char.find("div", class_="last-seen").text,
+            )
             return player
 
-    # Stub: return a fake player so you can test the bot before writing the scraper.
-    await asyncio.sleep(0)          # keep it a proper coroutine
-    return Player(
-        id=player_id,
-        name=f"Player_{player_id}",
-        main_character="Unknown",
-        rating=1500,
-        games=0,
-        deviation=350,
-        last_played="N/A",
-    )
+    except Exception as e:
+        print(f"[scraper] Error fetching player {player_id}: {e}")
+        return None
+    finally:
+        if own_session:
+            await session.close()
 
 
 async def fetch_all_tracked_players(player_ids: list[str]) -> list[Player]:
     """
-    Refresh data for every tracked player ID in one go.
-
+    Refresh data for every tracked player ID in one go using a shared session.
     Returns a list of Player objects (skips any IDs that returned None).
-    Feel free to replace the gather approach with a single bulk request if
-    the site offers one.
     """
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_player(pid, session) for pid in player_ids]
