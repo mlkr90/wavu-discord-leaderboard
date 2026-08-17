@@ -15,10 +15,12 @@ from models import Player
 
 DATA_DIR = Path(__file__).parent / "data"
 REGISTRATIONS_FILE = DATA_DIR / "registrations.json"
-LEADERBOARD_FILE = DATA_DIR / "leaderboard.json"
+UNLINKED_FILE      = DATA_DIR / "unlinked.json"
+LEADERBOARD_FILE   = DATA_DIR / "leaderboard.json"
 
 # In-memory cache (loaded once on startup)
 _registrations: dict[str, str] = {}      # discord_id -> player_id
+_unlinked: set[str] = set()              # player_ids with no Discord account
 _leaderboard: dict[str, Player] = {}     # player_id  -> Player
 _lock = asyncio.Lock()
 
@@ -38,6 +40,11 @@ def load():
     else:
         _registrations = {}
 
+    if UNLINKED_FILE.exists():
+        _unlinked = set(json.loads(UNLINKED_FILE.read_text()))
+    else:
+        _unlinked = set()
+
     if LEADERBOARD_FILE.exists():
         raw = json.loads(LEADERBOARD_FILE.read_text())
         _leaderboard = {pid: Player.from_dict(d) for pid, d in raw.items()}
@@ -47,6 +54,10 @@ def load():
 
 def _save_registrations():
     REGISTRATIONS_FILE.write_text(json.dumps(_registrations, indent=2))
+
+
+def _save_unlinked():
+    UNLINKED_FILE.write_text(json.dumps(sorted(_unlinked), indent=2))
 
 
 def _save_leaderboard():
@@ -122,13 +133,51 @@ async def remove_registration_for_player(player_id: str) -> bool:
 
 
 def all_player_ids() -> list[str]:
-    """Return every site player ID currently registered."""
-    return list(set(_registrations.values()))
+    """Return every tracked site player ID (linked and unlinked)."""
+    return list(set(_registrations.values()) | _unlinked)
 
 
 def all_registrations() -> dict[str, str]:
     """Return a copy of the full discord_id -> player_id mapping."""
     return dict(_registrations)
+
+
+# ---------------------------------------------------------------------------
+# Unlinked players (owner-added, no Discord account attached)
+# ---------------------------------------------------------------------------
+
+async def add_unlinked(player_id: str) -> tuple[bool, str]:
+    """
+    Add a player ID to the leaderboard without linking it to any Discord account.
+    Returns (success, message).
+    """
+    async with _lock:
+        # Already tracked via a Discord registration?
+        if player_id in _registrations.values():
+            return False, f"Player ID `{player_id}` is already linked to a Discord account."
+        if player_id in _unlinked:
+            return False, f"Player ID `{player_id}` is already on the leaderboard."
+        _unlinked.add(player_id)
+        _save_unlinked()
+        return True, f"Player ID `{player_id}` added to the leaderboard."
+
+
+async def remove_unlinked(player_id: str) -> tuple[bool, str]:
+    """
+    Remove an unlinked player ID.
+    Returns (success, message).
+    """
+    async with _lock:
+        if player_id not in _unlinked:
+            return False, f"Player ID `{player_id}` is not in the unlinked list."
+        _unlinked.discard(player_id)
+        _save_unlinked()
+        return True, f"Removed unlinked player ID `{player_id}`."
+
+
+def all_unlinked() -> list[str]:
+    """Return a copy of the unlinked player ID set."""
+    return sorted(_unlinked)
 
 
 # ---------------------------------------------------------------------------

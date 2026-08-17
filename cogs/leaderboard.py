@@ -6,7 +6,9 @@ Slash-command cog that handles:
   /leaderboard remove – unregister yourself (or any player if owner)
   /leaderboard show   – post/refresh the leaderboard in the current channel
   /leaderboard refresh – manually trigger a data refresh (owner only)
-  /leaderboard list   – show all registered Discord <-> player ID mappings (owner only)
+  /leaderboard list        – show all registered Discord <-> player ID mappings (owner only)
+  /leaderboard addplayer   – add a player ID with no Discord account attached (owner only)
+  /leaderboard removeplayer – remove an unlinked player ID (owner only)
 
 A background task automatically refreshes data and updates the pinned
 leaderboard message every REFRESH_INTERVAL seconds.
@@ -209,13 +211,59 @@ class LeaderboardCog(commands.Cog):
             return
 
         regs = db.all_registrations()
-        if not regs:
+        unlinked = db.all_unlinked()
+
+        if not regs and not unlinked:
             await interaction.response.send_message("No registrations yet.", ephemeral=True)
             return
 
         lines = [f"<@{did}> → `{pid}`" for did, pid in regs.items()]
+        if unlinked:
+            lines.append("")
+            lines.append("**Unlinked (no Discord account):**")
+            lines.extend(f"• `{pid}`" for pid in unlinked)
+
         embed = discord.Embed(title="📋 All Registrations", description="\n".join(lines), color=discord.Color.blurple())
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @lb.command(name="addplayer", description="(Owner only) Add a player ID to the leaderboard without a Discord account.")
+    @app_commands.describe(player_id="The site player ID to add")
+    async def lb_addplayer(self, interaction: discord.Interaction, player_id: str):
+        if not self._is_owner(interaction.user):
+            await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Verify the player exists on the site before adding
+        player = await scraper.fetch_player(player_id)
+        if player is None:
+            await interaction.followup.send(
+                f"❌ Player ID `{player_id}` was not found on the site.",
+                ephemeral=True,
+            )
+            return
+
+        success, msg = await db.add_unlinked(player_id)
+        if not success:
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+            return
+
+        await self._refresh_data()
+        await interaction.followup.send(f"✅ {msg} ({player.name})", ephemeral=True)
+
+    @lb.command(name="removeplayer", description="(Owner only) Remove an unlinked player ID from the leaderboard.")
+    @app_commands.describe(player_id="The unlinked site player ID to remove")
+    async def lb_removeplayer(self, interaction: discord.Interaction, player_id: str):
+        if not self._is_owner(interaction.user):
+            await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        success, msg = await db.remove_unlinked(player_id)
+        if success:
+            await self._refresh_data()
+        await interaction.followup.send(("✅ " if success else "❌ ") + msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
