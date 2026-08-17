@@ -10,7 +10,7 @@ A Discord bot that scrapes a website for player data and maintains a live leader
 discord-leaderboard-bot/
 ├── bot.py              # Entry point
 ├── models.py           # Player dataclass
-├── scraper.py          # ⬅ YOUR scraping logic goes here
+├── scraper.py          # Scraping logic
 ├── database.py         # JSON persistence layer
 ├── cogs/
 │   └── leaderboard.py  # Slash commands + background refresh
@@ -56,11 +56,6 @@ source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 5. Add your scraping logic
-
-Open `scraper.py` and fill in `fetch_player()`.  
-The function receives a player ID string and must return a `Player` object (or `None` if not found).
-
 ### 6. Run the bot
 
 ```bash
@@ -79,6 +74,8 @@ python bot.py
 | `/leaderboard show` | Anyone | Post (or update) the leaderboard in the current channel. |
 | `/leaderboard refresh` | Owner | Force an immediate data refresh. |
 | `/leaderboard list` | Owner | View all Discord ↔ player ID mappings. |
+| `/leaderboard addplayer` | Owner | Add a player ID to the leaderboard without a Discord account. |
+| `/leaderboard removeplayer` | Owner | Remove an unlinked player ID from the leaderboard. |
 
 ---
 
