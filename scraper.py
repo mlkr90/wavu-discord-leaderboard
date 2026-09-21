@@ -32,8 +32,11 @@ async def fetch_player(player_id: str, session: aiohttp.ClientSession | None = N
 
             soup = BeautifulSoup(await response.text(), "html.parser")
 
-            # Find the character div with the highest rating.
+            # Find the character div with the highest rating,
+            # considering only characters with deviation < 75 (enough games played).
             # Tiebreak: lower deviation wins.
+            DEVIATION_THRESHOLD = 75
+
             best_char = None
             best_rating = -1
             best_deviation = float("inf")
@@ -47,13 +50,16 @@ async def fetch_player(player_id: str, session: aiohttp.ClientSession | None = N
                 rating = int(mu_div.text[2:])  # strips the "μ=" prefix
                 deviation = int(sigma_div.text.replace("σ² ", ""))
 
+                if deviation >= DEVIATION_THRESHOLD:
+                    continue  # not enough games played on this character
+
                 if rating > best_rating or (rating == best_rating and deviation < best_deviation):
                     best_rating = rating
                     best_deviation = deviation
                     best_char = div
 
             if best_char is None:
-                return None
+                return None  # no character meets the deviation threshold
 
             name_div = soup.find("div", class_="name")
             player = Player(

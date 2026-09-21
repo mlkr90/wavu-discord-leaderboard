@@ -3,9 +3,10 @@ database.py
 -----------
 Lightweight JSON-backed persistence.
 
-Stores two things:
-  - registrations: {discord_user_id (str) -> site_player_id (str)}
-  - leaderboard:   {site_player_id  (str) -> Player dict}
+Stores three things:
+  - registrations:        {discord_user_id (str) -> site_player_id (str)}
+  - leaderboard:          {site_player_id  (str) -> Player dict}
+  - leaderboard_messages: {channel_id (str) -> message_id (int)}
 """
 
 import json
@@ -14,14 +15,16 @@ from pathlib import Path
 from models import Player
 
 DATA_DIR = Path(__file__).parent / "data"
-REGISTRATIONS_FILE = DATA_DIR / "registrations.json"
-UNLINKED_FILE      = DATA_DIR / "unlinked.json"
-LEADERBOARD_FILE   = DATA_DIR / "leaderboard.json"
+REGISTRATIONS_FILE       = DATA_DIR / "registrations.json"
+UNLINKED_FILE            = DATA_DIR / "unlinked.json"
+LEADERBOARD_FILE         = DATA_DIR / "leaderboard.json"
+LEADERBOARD_MESSAGES_FILE = DATA_DIR / "leaderboard_messages.json"
 
 # In-memory cache (loaded once on startup)
 _registrations: dict[str, str] = {}      # discord_id -> player_id
 _unlinked: set[str] = set()              # player_ids with no Discord account
 _leaderboard: dict[str, Player] = {}     # player_id  -> Player
+_leaderboard_messages: dict[int, int] = {}  # channel_id -> message_id
 _lock = asyncio.Lock()
 
 
@@ -33,7 +36,7 @@ def load():
     """Load persisted data from disk into memory. Call once at bot startup."""
     DATA_DIR.mkdir(exist_ok=True)
 
-    global _registrations, _leaderboard
+    global _registrations, _unlinked, _leaderboard, _leaderboard_messages
 
     if REGISTRATIONS_FILE.exists():
         _registrations = json.loads(REGISTRATIONS_FILE.read_text())
@@ -51,6 +54,13 @@ def load():
     else:
         _leaderboard = {}
 
+    if LEADERBOARD_MESSAGES_FILE.exists():
+        raw = json.loads(LEADERBOARD_MESSAGES_FILE.read_text())
+        # Keys are stored as strings in JSON; convert both to int
+        _leaderboard_messages = {int(ch): int(msg) for ch, msg in raw.items()}
+    else:
+        _leaderboard_messages = {}
+
 
 def _save_registrations():
     REGISTRATIONS_FILE.write_text(json.dumps(_registrations, indent=2))
@@ -64,6 +74,33 @@ def _save_leaderboard():
     LEADERBOARD_FILE.write_text(
         json.dumps({pid: p.to_dict() for pid, p in _leaderboard.items()}, indent=2)
     )
+
+
+def _save_leaderboard_messages():
+    LEADERBOARD_MESSAGES_FILE.write_text(
+        json.dumps({str(ch): msg for ch, msg in _leaderboard_messages.items()}, indent=2)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard message tracking
+# ---------------------------------------------------------------------------
+
+def get_leaderboard_messages() -> dict[int, int]:
+    """Return a copy of the channel_id -> message_id mapping."""
+    return dict(_leaderboard_messages)
+
+
+def set_leaderboard_message(channel_id: int, message_id: int):
+    """Record (or update) the leaderboard message ID for a channel."""
+    _leaderboard_messages[channel_id] = message_id
+    _save_leaderboard_messages()
+
+
+def clear_leaderboard_message(channel_id: int):
+    """Remove a channel's leaderboard message record (e.g. message was deleted)."""
+    _leaderboard_messages.pop(channel_id, None)
+    _save_leaderboard_messages()
 
 
 # ---------------------------------------------------------------------------

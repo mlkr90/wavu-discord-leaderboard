@@ -59,9 +59,6 @@ class LeaderboardCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # message_id of the pinned leaderboard post, per channel
-        # {channel_id: message_id}
-        self._leaderboard_messages: dict[int, int] = {}
         self.auto_refresh.start()
 
     def cog_unload(self):
@@ -74,8 +71,7 @@ class LeaderboardCog(commands.Cog):
     @tasks.loop(seconds=REFRESH_INTERVAL)
     async def auto_refresh(self):
         await self._refresh_data()
-        # Update every channel that has a posted leaderboard
-        for channel_id, message_id in list(self._leaderboard_messages.items()):
+        for channel_id, message_id in list(db.get_leaderboard_messages().items()):
             await self._update_leaderboard_message(channel_id, message_id)
 
     @auto_refresh.before_loop
@@ -104,15 +100,15 @@ class LeaderboardCog(commands.Cog):
             embed = build_leaderboard_embed(db.get_leaderboard())
             await message.edit(embed=embed)
         except discord.NotFound:
-            # Message was deleted; remove from tracking
-            self._leaderboard_messages.pop(channel_id, None)
+            # Message was deleted; stop tracking it
+            db.clear_leaderboard_message(channel_id)
         except discord.Forbidden:
             pass  # bot lost permissions
 
     async def _post_or_update_leaderboard(self, channel: discord.TextChannel) -> discord.Message:
         """Post a new leaderboard or update the existing one; returns the message."""
         embed = build_leaderboard_embed(db.get_leaderboard())
-        existing_id = self._leaderboard_messages.get(channel.id)
+        existing_id = db.get_leaderboard_messages().get(channel.id)
 
         if existing_id:
             try:
@@ -123,7 +119,7 @@ class LeaderboardCog(commands.Cog):
                 pass  # fall through to post new
 
         msg = await channel.send(embed=embed)
-        self._leaderboard_messages[channel.id] = msg.id
+        db.set_leaderboard_message(channel.id, msg.id)
         try:
             await msg.pin()
         except discord.Forbidden:
